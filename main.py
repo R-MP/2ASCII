@@ -11,10 +11,7 @@ import threading
 import tempfile
 
 # Global: ascii_chars pode ser alterado pela UI.
-ascii_chars = " .:-=+*+#%@"
-
-# Global: se screen_lock for True, o bloqueio NÃO ocorrerá (permitindo redimensionar e tela cheia).
-screen_lock = True
+ascii_chars = " `.-:;+=xX$@"
 
 # Para suportar drag & drop, use tkinterdnd2
 try:
@@ -25,10 +22,6 @@ except ImportError:
 
 # Função para travar o tamanho do console no Windows
 def lock_console_size():
-    global screen_lock
-    # Se screen_lock for True, ignora o bloqueio.
-    if screen_lock:
-        return
     hwnd = ctypes.windll.kernel32.GetConsoleWindow()
     if hwnd:
         GWL_STYLE = -16
@@ -84,10 +77,9 @@ def play_audio(video_path):
         print("Erro ao iniciar ffplay:", e)
 
 # Conversão via CPU (método tradicional) – usa a variável global ascii_chars
-def ascii_video_cpu(video_path, new_width):
+def ascii_video_cpu(video_path, new_width, custom_delay):
     os.system(f"mode con: cols={new_width} lines=40")
-    if not screen_lock:
-        lock_console_size()
+    lock_console_size()
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -117,7 +109,7 @@ def ascii_video_cpu(video_path, new_width):
         out_frame += "\n"
     os.system('cls' if os.name=='nt' else 'clear')
     print(out_frame)
-    time.sleep(0.025)
+    time.sleep(custom_delay)
     
     while True:
         ret, frame = cap.read()
@@ -135,16 +127,16 @@ def ascii_video_cpu(video_path, new_width):
             out_frame += "\n"
         os.system('cls' if os.name=='nt' else 'clear')
         print(out_frame)
-        time.sleep(0.025)
+        time.sleep(custom_delay)
     cap.release()
 
 # Conversão via GPU utilizando PyOpenCL com pré-carregamento e loading
-def ascii_video_gpu(video_path, gpu_name, new_width):
+def ascii_video_gpu(video_path, gpu_name, new_width, custom_delay):
     try:
         import pyopencl as cl
     except ImportError:
         print("PyOpenCL não está instalado. Usando conversão por CPU.")
-        ascii_video_cpu(video_path, new_width)
+        ascii_video_cpu(video_path, new_width, custom_delay)
         return
     
     global ascii_chars
@@ -180,7 +172,6 @@ def ascii_video_gpu(video_path, gpu_name, new_width):
         return
     
     fps = cap.get(cv2.CAP_PROP_FPS)
-    delay = 1 / fps if fps > 0 else 0.033
     ret, frame = cap.read()
     if not ret:
         print("Vídeo vazio.")
@@ -189,8 +180,7 @@ def ascii_video_gpu(video_path, gpu_name, new_width):
     height, width = gray.shape
     new_height = int((height / width) * new_width * 0.55)
     os.system(f"mode con: cols={new_width} lines={new_height}")
-    if not screen_lock:
-        lock_console_size()
+    lock_console_size()
     
     def process_frame(gray_frame):
         resized = cv2.resize(gray_frame, (new_width, new_height))
@@ -230,7 +220,7 @@ def ascii_video_gpu(video_path, gpu_name, new_width):
     for frame in ascii_frames:
         os.system('cls' if os.name=='nt' else 'clear')
         print(frame)
-        time.sleep(delay)
+        time.sleep(custom_delay)
 
 # Interface gráfica com Tkinter (suporte a drag&drop e dropdown para seleção de dispositivo)
 class App(TkinterDnD.Tk):
@@ -238,31 +228,40 @@ class App(TkinterDnD.Tk):
         super().__init__()
         self.title("2ASCII")
         self.geometry("400x300")
+
+        # Imgs
+        self.img_convert = tk.PhotoImage(file="assets/convert.png")
+        self.img_about = tk.PhotoImage(file="assets/about.png")
+        self.img_drop = tk.PhotoImage(file="assets/drop.png")
         
-        btn_convert = tk.Button(self, text="convert", command=self.convert)
-        btn_convert.place(x=65, y=50)
+        btn_convert = tk.Button(self, image=self.img_convert, command=self.convert, bd=0, highlightthickness=0, relief="flat")
+        btn_convert.place(x=45, y=20)
         
-        btn_about = tk.Button(self, text="about", command=self.about)
-        btn_about.place(x=70, y=100)
+        btn_about = tk.Button(self, image=self.img_about, command=self.about, bd=0, highlightthickness=0, relief="flat")
+        btn_about.place(x=45, y=50)
         
-        self.drop_area = tk.Label(self, text="Arraste ou clique para anexar mídia", relief="groove", width=30, height=15)
+        self.drop_area = tk.Label(self, image=self.img_drop, bd=0, highlightthickness=0, relief="flat")
         self.drop_area.place(x=170, y=20)
         self.drop_area.drop_target_register(DND_FILES)
         self.drop_area.dnd_bind('<<Drop>>', self.drop)
         self.drop_area.bind("<Button-1>", self.browse_files)
         
-        self.width_slider = tk.Scale(self, from_=20, to=200, orient=tk.HORIZONTAL, label="ASCII Width")
+        # Config
+        self.ascii_label = tk.Label(self, text="ASCII Config:")
+        self.ascii_label.place(x=50, y=100)
+
+        self.width_slider = tk.Scale(self, from_=20, to=200, orient=tk.HORIZONTAL)
         self.width_slider.set(80)
-        self.width_slider.place(x=45, y=150)
+        self.width_slider.place(x=35, y=120)
         
-        self.ascii_label = tk.Label(self, text="ASCII Chars:")
-        self.ascii_label.place(x=45, y=190)
+        
         self.ascii_entry = tk.Entry(self)
-        self.ascii_entry.insert(0, " .:-=+*+#%@")
-        self.ascii_entry.place(x=45, y=210)
-        
-        self.lock_checkbox = tk.Checkbutton(self, text="Disable Console Lock", command=self.toggle_lock)
-        self.lock_checkbox.place(x=20, y=230)
+        self.ascii_entry.insert(0, " `.-:;+=xX$@")
+        self.ascii_entry.place(x=25, y=180)
+
+        self.delay_entry = tk.Entry(self)
+        self.delay_entry.insert(0, "0.025")
+        self.delay_entry.place(x=25, y=200)
         
         device_options = get_available_devices()
         self.selected_device = tk.StringVar()
@@ -272,25 +271,21 @@ class App(TkinterDnD.Tk):
         
         self.file_path = None
 
-    def toggle_lock(self):
-        global screen_lock
-        screen_lock = not screen_lock
-        print("screen_lock:", screen_lock)
-
     def convert(self):
         if self.file_path:
             global ascii_chars
             ascii_chars = self.ascii_entry.get()
             selected = self.selected_device.get()
             width_value = self.width_slider.get()
+            delay_value = float(self.delay_entry.get())
             try:
                 if os.name == 'nt':
                     subprocess.Popen(
-                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars],
+                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars, "--delay", str(delay_value)],
                         creationflags=subprocess.CREATE_NEW_CONSOLE)
                 else:
                     subprocess.Popen(
-                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars])
+                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars, "--delay", str(delay_value)])
             except Exception as e:
                 messagebox.showerror("Erro", f"Não foi possível iniciar a conversão:\n{str(e)}")
         else:
@@ -327,15 +322,19 @@ if __name__ == "__main__":
         if "--width" in sys.argv:
             width_index = sys.argv.index("--width")
             new_width = int(sys.argv[width_index + 1])
+        custom_delay = 0.025
+        if "--delay" in sys.argv:
+            delay_index = sys.argv.index("--delay")
+            custom_delay = float(sys.argv[delay_index + 1])
         if "--ascii_chars" in sys.argv:
             index = sys.argv.index("--ascii_chars")
             ascii_chars = sys.argv[index + 1]
         if device_name is None or device_name.lower().startswith("cpu"):
-            ascii_video_cpu(video_file, new_width)
+            ascii_video_cpu(video_file, new_width, custom_delay)
         else:
             if device_name.lower().startswith("gpu:"):
                 device_name = device_name[4:].strip()
-            ascii_video_gpu(video_file, device_name, new_width)
+            ascii_video_gpu(video_file, device_name, new_width, custom_delay)
     else:
         app = App()
         app.mainloop()
