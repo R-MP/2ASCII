@@ -10,6 +10,8 @@ import ctypes
 import threading
 import tempfile
 
+gif = False
+
 # Global: ascii_chars pode ser alterado pela UI.
 ascii_chars = " `.-:;+=xX$@"
 
@@ -131,14 +133,14 @@ def ascii_video_cpu(video_path, new_width, custom_delay):
     cap.release()
 
 # Conversão via GPU utilizando PyOpenCL com pré-carregamento e loading
-def ascii_video_gpu(video_path, gpu_name, new_width, custom_delay):
+def ascii_video_gpu(video_path, gpu_name, new_width, custom_delay, gif_mode=False):
     try:
         import pyopencl as cl
     except ImportError:
         print("PyOpenCL não está instalado. Usando conversão por CPU.")
         ascii_video_cpu(video_path, new_width, custom_delay)
         return
-    
+
     global ascii_chars
     num_chars = len(ascii_chars)
     
@@ -153,7 +155,7 @@ def ascii_video_gpu(video_path, gpu_name, new_width, custom_delay):
             break
     if not chosen_device:
         print("GPU selecionada não encontrada. Usando conversão por CPU.")
-        ascii_video_cpu(video_path, new_width)
+        ascii_video_cpu(video_path, new_width, custom_delay)
         return
     
     ctx = cl.Context([chosen_device])
@@ -172,6 +174,7 @@ def ascii_video_gpu(video_path, gpu_name, new_width, custom_delay):
         return
     
     fps = cap.get(cv2.CAP_PROP_FPS)
+    delay = 1 / fps if fps > 0 else custom_delay
     ret, frame = cap.read()
     if not ret:
         print("Vídeo vazio.")
@@ -198,29 +201,22 @@ def ascii_video_gpu(video_path, gpu_name, new_width, custom_delay):
             out_frame += "".join(ascii_chars[pix] for pix in row) + "\n"
         return out_frame
     
-    ascii_frames = []
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    current_frame = 1
-    ascii_frames.append(process_frame(gray))
-    print(f"Carregando frames: {current_frame}/{total_frames}", end="\r")
-    
+    # Aqui, em vez de pré-carregar os frames, processamos em tempo real com loop
+    print("Iniciando reprodução (em loop: {})...".format(gif_mode))
     while True:
         ret, frame = cap.read()
         if not ret:
-            break
-        current_frame += 1
+            if gif_mode:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+            else:
+                break
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        ascii_frames.append(process_frame(gray))
-        print(f"Carregando frames: {current_frame}/{total_frames}", end="\r")
-    cap.release()
-    print("\nCarregamento concluído. Iniciando reprodução...")
-    
-    play_audio(video_path)
-    
-    for frame in ascii_frames:
+        out_frame = process_frame(gray)
         os.system('cls' if os.name=='nt' else 'clear')
-        print(frame)
+        print(out_frame)
         time.sleep(custom_delay)
+    cap.release()
 
 # Interface gráfica com Tkinter (suporte a drag&drop e dropdown para seleção de dispositivo)
 class App(TkinterDnD.Tk):
@@ -262,6 +258,10 @@ class App(TkinterDnD.Tk):
         self.delay_entry = tk.Entry(self)
         self.delay_entry.insert(0, "0.025")
         self.delay_entry.place(x=25, y=200)
+
+        self.gif_mode_var = tk.BooleanVar(value=False)
+        self.gif_checkbox = tk.Checkbutton(self, text="GIF Mode", variable=self.gif_mode_var)
+        self.gif_checkbox.place(x=25, y=230)
         
         device_options = get_available_devices()
         self.selected_device = tk.StringVar()
@@ -278,14 +278,15 @@ class App(TkinterDnD.Tk):
             selected = self.selected_device.get()
             width_value = self.width_slider.get()
             delay_value = float(self.delay_entry.get())
+            gif_mode_value = self.gif_mode_var.get()
             try:
                 if os.name == 'nt':
                     subprocess.Popen(
-                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars, "--delay", str(delay_value)],
+                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars, "--delay", str(delay_value), "--gif_mode", str(gif_mode_value)],
                         creationflags=subprocess.CREATE_NEW_CONSOLE)
                 else:
                     subprocess.Popen(
-                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars, "--delay", str(delay_value)])
+                        [sys.executable, __file__, "--convert", self.file_path, "--device", selected, "--width", str(width_value), "--ascii_chars", ascii_chars, "--delay", str(delay_value), "--gif_mode", str(gif_mode_value)])
             except Exception as e:
                 messagebox.showerror("Erro", f"Não foi possível iniciar a conversão:\n{str(e)}")
         else:
@@ -305,6 +306,10 @@ class App(TkinterDnD.Tk):
         if file_path:
             self.file_path = file_path
             self.drop_area.config(text=f"Mídia anexada:\n{self.file_path}")
+
+    def gif_mode(self):
+        global gif
+        gif = not gif
 
 if __name__ == "__main__":
     if "--convert" in sys.argv:
@@ -329,12 +334,16 @@ if __name__ == "__main__":
         if "--ascii_chars" in sys.argv:
             index = sys.argv.index("--ascii_chars")
             ascii_chars = sys.argv[index + 1]
+        gif_mode = False
+        if "--gif_mode" in sys.argv:
+            gif_index = sys.argv.index("--gif_mode")
+            gif_mode = sys.argv[gif_index + 1].lower() in ("true", "1", "yes")
         if device_name is None or device_name.lower().startswith("cpu"):
             ascii_video_cpu(video_file, new_width, custom_delay)
         else:
             if device_name.lower().startswith("gpu:"):
                 device_name = device_name[4:].strip()
-            ascii_video_gpu(video_file, device_name, new_width, custom_delay)
+            ascii_video_gpu(video_file, device_name, new_width, custom_delay, gif_mode)
     else:
         app = App()
         app.mainloop()
