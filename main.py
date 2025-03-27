@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import os
 import sys
 import subprocess
@@ -79,7 +79,7 @@ def play_audio(video_path):
         print("Erro ao iniciar ffplay:", e)
 
 # Conversão via CPU (método tradicional) – usa a variável global ascii_chars
-def ascii_video_cpu(video_path, new_width, custom_delay):
+def ascii_video_cpu(video_path, new_width, custom_delay, gif_mode=False):
     os.system(f"mode con: cols={new_width} lines=40")
     lock_console_size()
     
@@ -87,7 +87,7 @@ def ascii_video_cpu(video_path, new_width, custom_delay):
     if not cap.isOpened():
         print("Não foi possível abrir o vídeo.")
         return
-    
+
     fps = cap.get(cv2.CAP_PROP_FPS)
     
     ret, frame = cap.read()
@@ -100,6 +100,7 @@ def ascii_video_cpu(video_path, new_width, custom_delay):
     os.system(f"mode con: cols={new_width} lines={new_height}")
     
     global ascii_chars
+    # Processa e exibe o primeiro frame
     out_frame = ""
     gray = cv2.resize(gray, (new_width, new_height))
     for row in gray:
@@ -113,23 +114,45 @@ def ascii_video_cpu(video_path, new_width, custom_delay):
     print(out_frame)
     time.sleep(custom_delay)
     
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, (new_width, new_height))
-        out_frame = ""
-        for row in gray:
-            for pixel in row:
-                index = int(pixel / 256 * len(ascii_chars))
-                if index >= len(ascii_chars):
-                    index = len(ascii_chars) - 1
-                out_frame += ascii_chars[index]
-            out_frame += "\n"
-        os.system('cls' if os.name=='nt' else 'clear')
-        print(out_frame)
-        time.sleep(custom_delay)
+    if gif_mode:
+        # Loop infinito com reinício do vídeo quando chegar ao fim
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                continue
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (new_width, new_height))
+            out_frame = ""
+            for row in gray:
+                for pixel in row:
+                    index = int(pixel / 256 * len(ascii_chars))
+                    if index >= len(ascii_chars):
+                        index = len(ascii_chars) - 1
+                    out_frame += ascii_chars[index]
+                out_frame += "\n"
+            os.system('cls' if os.name=='nt' else 'clear')
+            print(out_frame)
+            time.sleep(custom_delay)
+    else:
+        # Processamento normal: encerra ao final do vídeo
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (new_width, new_height))
+            out_frame = ""
+            for row in gray:
+                for pixel in row:
+                    index = int(pixel / 256 * len(ascii_chars))
+                    if index >= len(ascii_chars):
+                        index = len(ascii_chars) - 1
+                    out_frame += ascii_chars[index]
+                out_frame += "\n"
+            os.system('cls' if os.name=='nt' else 'clear')
+            print(out_frame)
+            time.sleep(custom_delay)
     cap.release()
 
 # Conversão via GPU utilizando PyOpenCL com pré-carregamento e loading
@@ -201,55 +224,167 @@ def ascii_video_gpu(video_path, gpu_name, new_width, custom_delay, gif_mode=Fals
             out_frame += "".join(ascii_chars[pix] for pix in row) + "\n"
         return out_frame
     
+    ascii_frames = []
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    current_frame = 1
+    ascii_frames.append(process_frame(gray))
+    print(f"Carregando frames: {current_frame}/{total_frames}", end="\r")
+    
     # Aqui, em vez de pré-carregar os frames, processamos em tempo real com loop
     print("Iniciando reprodução (em loop: {})...".format(gif_mode))
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            if gif_mode:
+    
+    if gif_mode:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 continue
-            else:
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            out_frame = process_frame(gray)
+            os.system('cls' if os.name=='nt' else 'clear')
+            print(out_frame)
+            time.sleep(custom_delay)
+
+    else:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
                 break
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        out_frame = process_frame(gray)
-        os.system('cls' if os.name=='nt' else 'clear')
-        print(out_frame)
-        time.sleep(custom_delay)
-    cap.release()
+            current_frame += 1
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            ascii_frames.append(process_frame(gray))
+            print(f"Carregando frames: {current_frame}/{total_frames}", end="\r")
+        cap.release()
+        print("\nCarregamento concluído. Iniciando reprodução...")
+
+        play_audio(video_path)
+        
+        for frame in ascii_frames:
+            os.system('cls' if os.name=='nt' else 'clear')
+            print(frame)
+            time.sleep(custom_delay)
 
 # Interface gráfica com Tkinter (suporte a drag&drop e dropdown para seleção de dispositivo)
 class App(TkinterDnD.Tk):
     def __init__(self):
         super().__init__()
+        bg_color = "#f4e887"
         self.title("2ASCII")
         self.geometry("400x300")
+        self.configure(bg=bg_color)
+
+        style = ttk.Style(self)
 
         # Imgs
         self.img_convert = tk.PhotoImage(file="assets/convert.png")
         self.img_about = tk.PhotoImage(file="assets/about.png")
         self.img_drop = tk.PhotoImage(file="assets/drop.png")
+        self.img_asc_title = tk.PhotoImage(file="assets/ascii-config.png")
+        self.img_slider = tk.PhotoImage(file="assets/slider-inside.png")
+        self.img_rail = tk.PhotoImage(file="assets/rail.png")
+        self.img_gif_label = tk.PhotoImage(file="assets/gif-mode.png")
+        self.img_unchecked = tk.PhotoImage(file="assets/unchecked.png")
+        self.img_checked = tk.PhotoImage(file="assets/checked.png")
+        self.img_devices_bg = tk.PhotoImage(file="assets/devices-bg.png")
+        self.img_devices_darrow = tk.PhotoImage(file="assets/down-arrow.png")
         
-        btn_convert = tk.Button(self, image=self.img_convert, command=self.convert, bd=0, highlightthickness=0, relief="flat")
+        btn_convert = tk.Button(self, image=self.img_convert, command=self.convert, bd=0, bg=bg_color, highlightthickness=0, relief="flat")
         btn_convert.place(x=45, y=20)
         
-        btn_about = tk.Button(self, image=self.img_about, command=self.about, bd=0, highlightthickness=0, relief="flat")
+        btn_about = tk.Button(self, image=self.img_about, command=self.about, bd=0, bg=bg_color, highlightthickness=0, relief="flat")
         btn_about.place(x=45, y=50)
         
-        self.drop_area = tk.Label(self, image=self.img_drop, bd=0, highlightthickness=0, relief="flat")
+        self.drop_area = tk.Label(self, image=self.img_drop, bd=0, bg=bg_color, highlightthickness=0, relief="flat")
         self.drop_area.place(x=170, y=20)
         self.drop_area.drop_target_register(DND_FILES)
         self.drop_area.dnd_bind('<<Drop>>', self.drop)
         self.drop_area.bind("<Button-1>", self.browse_files)
         
         # Config
-        self.ascii_label = tk.Label(self, text="ASCII Config:")
-        self.ascii_label.place(x=50, y=100)
+        self.ascii_label = tk.Label(self, image=self.img_asc_title, bg=bg_color)
+        self.ascii_label.place(x=25, y=80)
 
-        self.width_slider = tk.Scale(self, from_=20, to=200, orient=tk.HORIZONTAL)
+        # Slider Style
+        style.configure("custom.Horizontal.TScale", troughcolor="red" )
+
+        style.element_create(
+            "custom.Horizontal.Scale.slider",
+            "image",
+            self.img_slider,
+            border=0,
+            sticky=""
+        )
+
+        style.element_create(
+            "custom.Horizontal.Scale.trough",
+            "image",
+            self.img_rail,
+            border=0,
+            sticky="nswe"
+        )
+
+        style.layout("custom.Horizontal.TScale",
+            [("custom.Horizontal.Scale.trough", 
+            {"children":
+                [("custom.Horizontal.Scale.slider", 
+                {"side": "left", "sticky": ""})],
+                "sticky": "nswe"})]
+        )
+
+
+        # Combobox Style
+
+        style.element_create(
+            "RoundedCombobox.field",
+            "image",
+            self.img_devices_bg,
+            border=0,
+            sticky="nswe"
+        )
+
+        style.element_create(
+            "RoundedCombobox.downarrow",
+            "image",
+            self.img_devices_darrow,
+            border=0,
+            sticky=""
+        )
+
+        style.layout("Rounded.TCombobox",
+            [
+                ("RoundedCombobox.downarrow", {
+                    "side": "right",
+                    "sticky": "ns"
+                }),
+                ("RoundedCombobox.field", {
+                    "side": "left",
+                    "sticky": "nswe",
+                    "children": [
+                        ("Combobox.padding", {
+                            "side": "left",
+                            "sticky": "nswe",
+                            "children": [
+                                ("Combobox.textarea", {"sticky": "nswe"})
+                            ]
+                        })
+                    ]
+                })
+            ]
+        )
+
+        style.configure("Rounded.TCombobox",
+            fieldbackground = bg_color,
+            background = bg_color,
+            foreground = "black",
+            font = ("Arial", 10),
+            padding = (10, 0, 0, 0),
+            relief = "flat"
+        )
+
+        self.width_slider = ttk.Scale(self, style="custom.Horizontal.TScale", from_=20, to=200, orient=tk.HORIZONTAL)
         self.width_slider.set(80)
-        self.width_slider.place(x=35, y=120)
-        
+        self.width_slider.place(x=30, y=120)
         
         self.ascii_entry = tk.Entry(self)
         self.ascii_entry.insert(0, " `.-:;+=xX$@")
@@ -260,14 +395,30 @@ class App(TkinterDnD.Tk):
         self.delay_entry.place(x=25, y=200)
 
         self.gif_mode_var = tk.BooleanVar(value=False)
-        self.gif_checkbox = tk.Checkbutton(self, text="GIF Mode", variable=self.gif_mode_var)
-        self.gif_checkbox.place(x=25, y=230)
+        self.gif_checkbox = tk.Checkbutton(self, variable=self.gif_mode_var, image=self.img_unchecked, selectimage=self.img_checked, indicatoron=0, compound="center", width=self.img_unchecked.width(), height=self.img_unchecked.height(), bd=0, bg=bg_color, activebackground=bg_color, selectcolor=bg_color, highlightthickness=0, relief="flat")
+        self.gif_checkbox.place(x=20, y=230)
+
+        self.gif_label = tk.Label(self, image=self.img_gif_label, bd=0, bg=bg_color, highlightthickness=0, relief="flat")
+        self.gif_label.place(x=50, y=230)
         
         device_options = get_available_devices()
         self.selected_device = tk.StringVar()
-        self.selected_device.set(device_options[0])
-        dropdown = tk.OptionMenu(self, self.selected_device, *device_options)
-        dropdown.place(x=20, y=260)
+        if device_options:
+            self.selected_device.set(device_options[0])
+
+        self.devices = ttk.Combobox(
+            self,
+            style="Rounded.TCombobox",
+            textvariable=self.selected_device,
+            values=device_options,
+            state="readonly",
+            height=6,
+            width=35
+        )
+        self.devices.place(x=20, y=260)
+
+        if device_options:
+            self.devices.current(0)
         
         self.file_path = None
 
@@ -312,38 +463,42 @@ class App(TkinterDnD.Tk):
         gif = not gif
 
 if __name__ == "__main__":
-    if "--convert" in sys.argv:
-        try:
-            convert_index = sys.argv.index("--convert")
-            video_file = sys.argv[convert_index + 1]
-        except:
-            print("Caminho do vídeo não fornecido.")
-            sys.exit(1)
-        device_name = None
-        if "--device" in sys.argv:
-            device_index = sys.argv.index("--device")
-            device_name = sys.argv[device_index + 1]
-        new_width = 160
-        if "--width" in sys.argv:
-            width_index = sys.argv.index("--width")
-            new_width = int(sys.argv[width_index + 1])
-        custom_delay = 0.025
-        if "--delay" in sys.argv:
-            delay_index = sys.argv.index("--delay")
-            custom_delay = float(sys.argv[delay_index + 1])
-        if "--ascii_chars" in sys.argv:
-            index = sys.argv.index("--ascii_chars")
-            ascii_chars = sys.argv[index + 1]
-        gif_mode = False
-        if "--gif_mode" in sys.argv:
-            gif_index = sys.argv.index("--gif_mode")
-            gif_mode = sys.argv[gif_index + 1].lower() in ("true", "1", "yes")
-        if device_name is None or device_name.lower().startswith("cpu"):
-            ascii_video_cpu(video_file, new_width, custom_delay)
+    try:
+        if "--convert" in sys.argv:
+            try:
+                convert_index = sys.argv.index("--convert")
+                video_file = sys.argv[convert_index + 1]
+            except:
+                print("Caminho do vídeo não fornecido.")
+                sys.exit(1)
+            device_name = None
+            if "--device" in sys.argv:
+                device_index = sys.argv.index("--device")
+                device_name = sys.argv[device_index + 1]
+            new_width = 160
+            if "--width" in sys.argv:
+                width_index = sys.argv.index("--width")
+                new_width = int(float(sys.argv[width_index + 1]))
+            custom_delay = 0.025
+            if "--delay" in sys.argv:
+                delay_index = sys.argv.index("--delay")
+                custom_delay = float(sys.argv[delay_index + 1])
+            if "--ascii_chars" in sys.argv:
+                index = sys.argv.index("--ascii_chars")
+                ascii_chars = sys.argv[index + 1]
+            gif_mode = False
+            if "--gif_mode" in sys.argv:
+                gif_index = sys.argv.index("--gif_mode")
+                gif_mode = sys.argv[gif_index + 1].lower() in ("true", "1", "yes")
+            if device_name is None or device_name.lower().startswith("cpu"):
+                ascii_video_cpu(video_file, new_width, custom_delay)
+            else:
+                if device_name.lower().startswith("gpu:"):
+                    device_name = device_name[4:].strip()
+                ascii_video_gpu(video_file, device_name, new_width, custom_delay, gif_mode)
         else:
-            if device_name.lower().startswith("gpu:"):
-                device_name = device_name[4:].strip()
-            ascii_video_gpu(video_file, device_name, new_width, custom_delay, gif_mode)
-    else:
-        app = App()
-        app.mainloop()
+            app = App()
+            app.mainloop()
+    except Exception as e:
+        print("Ocorreu um erro:", e)
+        input("Pressione Enter para sair...")
